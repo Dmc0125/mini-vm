@@ -1,0 +1,9 @@
+v : number = 1
+
+for {
+    if v == 100 {
+        break
+    }
+
+    v += 1
+}
