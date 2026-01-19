@@ -2,6 +2,7 @@ package main
 
 import "../vm"
 import "core:fmt"
+import "core:mem"
 import "core:os"
 import "core:strconv"
 
@@ -72,14 +73,23 @@ token_string :: proc(t: Token) -> string {
 }
 
 Parser :: struct {
-	sourceBuf:   []byte,
-	i:           int,
-	line:        int,
-	char:        int,
-	tokens:      [dynamic]Token,
-	expressions: [dynamic]Expression,
-	statements:  [dynamic]Statement,
-	roots:       [dynamic]int,
+	// Tokenizer
+	sourceBuf:    []byte,
+	i:            int,
+	line:         int,
+	char:         int,
+	tokens:       [dynamic]Token,
+
+	// AST
+	expressions:  [dynamic]Expression,
+	statements:   [dynamic]Statement,
+	roots:        [dynamic]int,
+
+	// Generator
+	variables:    map[string]Variable,
+	mem_offset:   u16,
+	instructions: [dynamic]vm.Instruction,
+	break_ixs:    [dynamic]int,
 }
 
 parser_new_token :: proc(p: ^Parser, kind: Lex, val: []byte) {
@@ -122,11 +132,9 @@ Declaration :: struct {
 	// type: NumberType,
 }
 
-// <name> = <left> <op> <right>
+// <name> = <expression>
 Assignment :: struct {
-	name:  Ident,
-	left:  int,
-	op:    Lex,
+	ident: Ident,
 	right: int,
 }
 
@@ -179,6 +187,7 @@ parse_literal :: proc(p: ^Parser, val: Token) -> (Expression, string) {
 
 parse_binary :: proc(p: ^Parser, left: Expression) -> (i: int, valid: bool, err: string) {
 	if p.i + 1 >= len(p.tokens) {
+		p.i += 1
 		return
 	}
 	n := p.tokens[p.i + 1]
@@ -292,16 +301,16 @@ parse_assignment :: proc(p: ^Parser) -> (a: Statement, err: string) {
 		assert(false, "unimplemented")
 		return
 	case .PlusEqual:
-		eIdx: int
-		eIdx, err = parse_expression(p)
+		rIdx: int
+		rIdx, err = parse_expression(p)
 		if len(err) > 0 {
 			err = fmt.aprintf("invalid assignment: %s", err)
 			return
 		}
 
 		append(&p.expressions, Ident{name})
-		a = Assignment{Ident{name}, len(p.expressions) - 1, .Plus, eIdx}
-
+		append(&p.expressions, Binary{left = len(p.expressions) - 1, op = .Plus, right = rIdx})
+		a = Assignment{Ident{name}, len(p.expressions) - 1}
 		return
 	case:
 		err = fmt.aprintf("expected '=' or '+=': line %d, char %d", op.line, op.char)
@@ -417,16 +426,135 @@ parse_statement :: proc(p: ^Parser) -> (Statement, string) {
 	return Declaration{}, fmt.aprintf("expected statement: line %d, char %d", t.line, t.char)
 }
 
-gen_ix :: proc(stmt: Statement) -> (ix: vm.Instruction) {
-	switch s in stmt {
-	case Declaration:
-	case Assignment:
-	case For:
-	case If:
-	case Break:
+
+Variable :: struct {
+	offset: u16,
+	// type: NumberType,
+}
+
+gen_expr :: proc(p: ^Parser, expr: Expression) -> string {
+	switch expr in expr {
+	case u16:
+		append(
+			&p.instructions,
+			// LOAD expr
+			vm.Instruction{op = .LI, dst = .R0, val = expr},
+		)
+	case Binary:
+		if err := gen_expr(p, p.expressions[expr.left]); len(err) > 0 {
+			return err
+		}
+		// need to store result in scratch
+		append(&p.instructions, vm.Instruction{op = .MOV, dst = .R2, src = .R0})
+		if err := gen_expr(p, p.expressions[expr.right]); len(err) > 0 {
+			return err
+		}
+
+		#partial switch expr.op {
+		case .DoubleEqual:
+			append(
+				&p.instructions,
+				vm.Instruction{op = .SUB, dst = .R2, src = .R0},
+				vm.Instruction{op = .MOV, dst = .R0, src = .R2},
+			)
+		case .Plus:
+			append(&p.instructions, vm.Instruction{op = .ADD, dst = .R0, src = .R2})
+		case:
+			return "invalid operand in binary expression"
+		}
+	case Ident:
+		srcName := string(expr.name)
+		src, ok := p.variables[srcName]
+		if !ok {
+			return fmt.aprintf("variable '%s' is undefined", srcName)
+		}
+
+		append(
+			&p.instructions,
+			// LOAD expr
+			vm.Instruction{op = .LI, dst = .R0, val = src.offset},
+			vm.Instruction{op = .LOAD, dst = .R0, src = .R0},
+		)
 	}
 
-	return
+	return ""
+}
+
+validate_and_gen_ix :: proc(p: ^Parser, stmt: Statement) -> string {
+	switch s in stmt {
+	case Declaration:
+		dstName := string(s.name)
+		if _, ok := p.variables[dstName]; ok {
+			return fmt.aprintf("variable '%s' already declared", dstName)
+		}
+		dst := Variable{p.mem_offset}
+		p.mem_offset += 1
+		p.variables[dstName] = dst
+
+		if err := gen_expr(p, p.expressions[s.expression]); len(err) > 0 {
+			return err
+		}
+
+		append(
+			&p.instructions,
+			// STORE expr
+			vm.Instruction{op = .LI, dst = .R1, val = dst.offset},
+			vm.Instruction{op = .STORE, dst = .R1, src = .R0},
+		)
+	case Assignment:
+		dstName := string(s.ident.name)
+		dst, ok := p.variables[dstName]
+		if !ok {
+			return fmt.aprintf("variable '%s' is undefined", dstName)
+		}
+
+		if err := gen_expr(p, p.expressions[s.right]); len(err) > 0 {
+			return err
+		}
+
+
+		append(
+			&p.instructions,
+			// STORE expr
+			vm.Instruction{op = .LI, dst = .R1, val = dst.offset},
+			vm.Instruction{op = .STORE, dst = .R1, src = .R0},
+		)
+	case For:
+		start := len(p.instructions)
+
+		for bs in s.block {
+			if err := validate_and_gen_ix(p, p.statements[bs]); len(err) > 0 {
+				return err
+			}
+		}
+
+		append(&p.instructions, vm.Instruction{op = .J, val = u16(start)})
+
+		for bix in p.break_ixs {
+			p.instructions[bix].val = u16(len(p.instructions))
+		}
+		clear(&p.break_ixs)
+	case If:
+		if err := gen_expr(p, p.expressions[s.condition]); len(err) > 0 {
+			return err
+		}
+
+		jump_ix := len(p.instructions)
+		append(&p.instructions, vm.Instruction{op = .JNZ})
+
+		for bs in s.block {
+			if err := validate_and_gen_ix(p, p.statements[bs]); len(err) > 0 {
+				return err
+			}
+		}
+
+		p.instructions[jump_ix].val = u16(len(p.instructions))
+	case Break:
+		append(&p.instructions, vm.Instruction{op = .J})
+		append(&p.break_ixs, len(p.instructions) - 1)
+	}
+
+	return ""
 }
 
 main :: proc() {
@@ -434,6 +562,20 @@ main :: proc() {
 		fmt.println("usage: parser <file>")
 		return
 	}
+
+	// track: mem.Tracking_Allocator
+	// mem.tracking_allocator_init(&track, context.allocator)
+	// context.allocator = mem.tracking_allocator(&track)
+	//
+	// defer {
+	// 	if len(track.allocation_map) > 0 {
+	// 		fmt.eprintf("=== %v allocations not freed: ===\n", len(track.allocation_map))
+	// 		for _, entry in track.allocation_map {
+	// 			fmt.eprintf("- %v bytes @ %v\n", entry.size, entry.location)
+	// 		}
+	// 	}
+	// 	mem.tracking_allocator_destroy(&track)
+	// }
 
 	sourceBuf, ok := read_source_file(os.args[1])
 	if !ok {
@@ -458,6 +600,20 @@ main :: proc() {
 		case c == '\n':
 			p.line += 1
 			p.char = -1
+		case c == '/':
+			if p.i + 1 < len(sourceBuf) && sourceBuf[p.i + 1] == '/' {
+				p.i += 1
+				for {
+					p.i += 1
+					if p.i >= len(sourceBuf) {
+						break
+					}
+					if sourceBuf[p.i] == '\n' {
+						p.line += 1
+						continue outer
+					}
+				}
+			}
 		case c == ':':
 			parser_new_token(&p, .Colon, nil)
 		case c == '=':
@@ -554,6 +710,12 @@ main :: proc() {
 		p.char += 1
 	}
 
+	fmt.println()
+	fmt.println("tokens:")
+	for t in p.tokens {
+		fmt.println(token_string(t))
+	}
+
 	// parse tokens into AST
 
 	p.i = 0
@@ -567,16 +729,35 @@ main :: proc() {
 		}
 	}
 
+	fmt.println()
+	fmt.println("expressions:")
 	for e in p.expressions {
 		fmt.println(e)
 	}
+
 	fmt.println()
+	fmt.println("statements:")
 	for s in p.statements {
 		fmt.println(s)
 	}
 
 	fmt.println()
+	fmt.println("roots:")
 	for i in p.roots {
 		fmt.println(p.statements[i])
+	}
+
+	for i in p.roots {
+		if err := validate_and_gen_ix(&p, p.statements[i]); len(err) > 0 {
+			assert(false, fmt.aprintf("error: %s", err))
+		}
+	}
+
+	append(&p.instructions, vm.Instruction{op = .EXIT})
+
+	fmt.println()
+	fmt.println("instructions:")
+	for ix in p.instructions {
+		fmt.println(ix)
 	}
 }

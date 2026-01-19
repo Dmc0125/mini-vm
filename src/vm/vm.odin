@@ -1,8 +1,11 @@
 package vm
 
 Register :: enum u8 {
+	// expression result
 	R0,
+	// address
 	R1,
+	// scratch
 	R2,
 	R3,
 	Count,
