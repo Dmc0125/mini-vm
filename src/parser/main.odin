@@ -1,4 +1,4 @@
-package main
+package parser
 
 import "../vm"
 import "core:fmt"
@@ -6,19 +6,17 @@ import "core:mem"
 import "core:os"
 import "core:strconv"
 
-read_source_file :: proc(path: string) -> ([]byte, bool) {
+read_source_file :: proc(path: string) -> ([]byte, string) {
 	fh, err := os.open(path)
 	if err != nil {
-		fmt.printfln("unable to open file: %s", err)
-		return nil, false
+		return nil, fmt.aprintf("unable to open file: %s", err)
 	}
 	defer os.close(fh)
 
 	size: i64
 	size, err = os.file_size(fh)
 	if err != nil {
-		fmt.printfln("unable to get file size: %s", err)
-		return nil, false
+		return nil, fmt.aprintf("unable to get file size: %s", err)
 	}
 
 	buf := make([]byte, size)
@@ -26,15 +24,13 @@ read_source_file :: proc(path: string) -> ([]byte, bool) {
 	read: int
 	read, err = os.read(fh, buf)
 	if err != nil {
-		fmt.printfln("unable to read file: %s", err)
-		return nil, false
+		return nil, fmt.aprintf("unable to read file: %s", err)
 	}
 	if i64(read) != size {
-		fmt.printfln("unable to read file: read %d bytes, expected %d", read, size)
-		return nil, false
+		return nil, fmt.aprintf("unable to read file: read %d bytes, expected %d", read, size)
 	}
 
-	return buf, true
+	return buf, ""
 }
 
 Lex :: enum {
@@ -557,12 +553,7 @@ validate_and_gen_ix :: proc(p: ^Parser, stmt: Statement) -> string {
 	return ""
 }
 
-main :: proc() {
-	if len(os.args) < 2 {
-		fmt.println("usage: parser <file>")
-		return
-	}
-
+parse :: proc(path: string) -> ([dynamic]vm.Instruction, string) {
 	// track: mem.Tracking_Allocator
 	// mem.tracking_allocator_init(&track, context.allocator)
 	// context.allocator = mem.tracking_allocator(&track)
@@ -577,9 +568,9 @@ main :: proc() {
 	// 	mem.tracking_allocator_destroy(&track)
 	// }
 
-	sourceBuf, ok := read_source_file(os.args[1])
-	if !ok {
-		return
+	sourceBuf, err := read_source_file(path)
+	if len(err) > 0 {
+		return nil, err
 	}
 
 	// parse into tokens
@@ -722,42 +713,44 @@ main :: proc() {
 
 	for p.i < len(p.tokens) {
 		if st, err := parse_statement(&p); len(err) > 0 {
-			assert(false, fmt.aprintf("error: %s", err))
+			return nil, fmt.aprintf("parse error: %s", err)
 		} else {
 			append(&p.statements, st)
 			append(&p.roots, len(p.statements) - 1)
 		}
 	}
 
-	fmt.println()
-	fmt.println("expressions:")
-	for e in p.expressions {
-		fmt.println(e)
-	}
-
-	fmt.println()
-	fmt.println("statements:")
-	for s in p.statements {
-		fmt.println(s)
-	}
-
-	fmt.println()
-	fmt.println("roots:")
-	for i in p.roots {
-		fmt.println(p.statements[i])
-	}
+	// fmt.println()
+	// fmt.println("expressions:")
+	// for e in p.expressions {
+	// 	fmt.println(e)
+	// }
+	//
+	// fmt.println()
+	// fmt.println("statements:")
+	// for s in p.statements {
+	// 	fmt.println(s)
+	// }
+	//
+	// fmt.println()
+	// fmt.println("roots:")
+	// for i in p.roots {
+	// 	fmt.println(p.statements[i])
+	// }
 
 	for i in p.roots {
 		if err := validate_and_gen_ix(&p, p.statements[i]); len(err) > 0 {
-			assert(false, fmt.aprintf("error: %s", err))
+			return nil, fmt.aprintf("gen error: %s", err)
 		}
 	}
 
 	append(&p.instructions, vm.Instruction{op = .EXIT})
 
-	fmt.println()
-	fmt.println("instructions:")
-	for ix in p.instructions {
-		fmt.println(ix)
-	}
+	// fmt.println()
+	// fmt.println("instructions:")
+	// for ix in p.instructions {
+	// 	fmt.println(ix)
+	// }
+
+	return p.instructions, ""
 }
