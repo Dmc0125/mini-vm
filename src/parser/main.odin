@@ -39,6 +39,7 @@ Lex :: enum {
 	// keywords
 	Ident,
 	NumberType,
+	Print,
 
 	// operators
 	Colon,
@@ -147,12 +148,17 @@ If :: struct {
 
 Break :: struct {}
 
+Print :: struct {
+	expr: int,
+}
+
 Statement :: union {
 	Declaration,
 	Assignment,
 	For,
 	If,
 	Break,
+	Print,
 }
 
 parse_literal :: proc(p: ^Parser, val: Token) -> (Expression, string) {
@@ -417,6 +423,17 @@ parse_statement :: proc(p: ^Parser) -> (Statement, string) {
 	case .Break:
 		p.i += 1
 		return Break{}, ""
+	case .Print:
+		kw := p.tokens[p.i]
+		p.i += 1
+
+		eIdx, err := parse_expression(p)
+		if len(err) > 0 {
+			err = fmt.aprintf("invalid print statement: %s", err)
+			return Declaration{}, err
+		}
+
+		return Print{eIdx}, ""
 	}
 
 	return Declaration{}, fmt.aprintf("expected statement: line %d, char %d", t.line, t.char)
@@ -548,6 +565,16 @@ validate_and_gen_ix :: proc(p: ^Parser, stmt: Statement) -> string {
 	case Break:
 		append(&p.instructions, vm.Instruction{op = .J})
 		append(&p.break_ixs, len(p.instructions) - 1)
+	case Print:
+		if err := gen_expr(p, p.expressions[s.expr]); len(err) > 0 {
+			return err
+		}
+
+		append(
+			&p.instructions,
+			// TRAP PUTS
+			vm.Instruction{op = .TRAP, src = .R0, trapFlag = .PUTU},
+		)
 	}
 
 	return ""
@@ -668,6 +695,15 @@ parse :: proc(path: string) -> ([dynamic]vm.Instruction, string) {
 					parser_new_token(&p, .NumberType, nil)
 					p.char += 5
 				}
+			// print
+			case 'p':
+				// print
+				p.i += 1
+				p.char += 1
+				if ok = parser_consume(&p, "rint"); ok {
+					parser_new_token(&p, .Print, nil)
+					p.char += 4
+				}
 			}
 
 			// Ident
@@ -701,11 +737,11 @@ parse :: proc(path: string) -> ([dynamic]vm.Instruction, string) {
 		p.char += 1
 	}
 
-	fmt.println()
-	fmt.println("tokens:")
-	for t in p.tokens {
-		fmt.println(token_string(t))
-	}
+	// fmt.println()
+	// fmt.println("tokens:")
+	// for t in p.tokens {
+	// 	fmt.println(token_string(t))
+	// }
 
 	// parse tokens into AST
 

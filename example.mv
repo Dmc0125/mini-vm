@@ -5,67 +5,7 @@ for {
         break
     }
 
+    print v
     v += 1
 }
-
-// start:
-// LI R1 0
-// LI R0 1
-// STORE R0 [R1]
-//
-// for:
-//
-// if condition:
-// LI R2 100
-// LI R1 0
-// LOAD R0 [R1]
-// SUB R2 R0
-// MOV R0 R2
-// JNZ R0 if else
-//
-// if body:
-// J exit
-//
-// if else:
-// LI R2 1 
-// LI R1 0
-// LOAD R0 [R1]
-// ADD R2 R0
-// STORE R0 [R1]
-//
-// J for
-//
-// branch:
-// EXIT
-
-// start:
-// Instruction{op = "LI", dst = "R0", src = "R0", val = 1, trapFlag = "PUTU"}
-// Instruction{op = "LI", dst = "R1", src = "R0", val = 0, trapFlag = "PUTU"}
-// Instruction{op = "STORE", dst = "R1", src = "R0", val = 0, trapFlag = "PUTU"}
-// 
-// for:
-// 
-// if condition:
-// Instruction{op = "LI", dst = "R0", src = "R0", val = 0, trapFlag = "PUTU"}
-// Instruction{op = "LOAD", dst = "R0", src = "R0", val = 0, trapFlag = "PUTU"}
-// Instruction{op = "MOV", dst = "R2", src = "R0", val = 0, trapFlag = "PUTU"}
-// Instruction{op = "LI", dst = "R0", src = "R0", val = 100, trapFlag = "PUTU"}
-// Instruction{op = "SUB", dst = "R2", src = "R0", val = 0, trapFlag = "PUTU"}
-// Instruction{op = "MOV", dst = "R0", src = "R2", val = 0, trapFlag = "PUTU"}
-// Instruction{op = "JNZ", dst = "R0", src = "R0", val = 11, trapFlag = "PUTU"}
-// 
-// break:
-// Instruction{op = "J", dst = "R0", src = "R0", val = 19, trapFlag = "PUTU"}
-// 
-// else:
-// Instruction{op = "LI", dst = "R0", src = "R0", val = 0, trapFlag = "PUTU"}
-// Instruction{op = "LOAD", dst = "R0", src = "R0", val = 0, trapFlag = "PUTU"}
-// Instruction{op = "MOV", dst = "R2", src = "R0", val = 0, trapFlag = "PUTU"}
-// Instruction{op = "LI", dst = "R0", src = "R0", val = 1, trapFlag = "PUTU"}
-// Instruction{op = "ADD", dst = "R0", src = "R2", val = 0, trapFlag = "PUTU"}
-// Instruction{op = "LI", dst = "R1", src = "R0", val = 0, trapFlag = "PUTU"}
-// Instruction{op = "STORE", dst = "R1", src = "R0", val = 0, trapFlag = "PUTU"}
-// Instruction{op = "J", dst = "R0", src = "R0", val = 3, trapFlag = "PUTU"}
-// 
-// Instruction{op = "EXIT", dst = "R0", src = "R0", val = 0, trapFlag = "PUTU"}
 
